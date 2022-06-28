@@ -1,0 +1,97 @@
+# Starter pipeline
+# Start with a minimal pipeline that you can customize to build and deploy your code.
+# Add steps that build, run tests, deploy, and more:
+# https://aka.ms/yaml
+
+trigger:
+  branches:
+    include:
+    - workspace_publish
+  paths:
+    include:
+    - 'SourceWorkspaceName/*'
+
+pool:
+  vmimage: 'windows-latest'
+
+variables:
+- name: azureSubscription
+  value: 'synapsesptest' #name of your service connection
+- name: SourceWorkspaceName
+  value: 'SourceWorkspaceName'
+- name: DeployWorkspaceName
+  value: 'DeployWorkspaceName'
+- name: DeploymentResourceGroupName
+  value: 'rg'
+stages:
+  - stage: Build
+    displayName: Build Code
+    jobs:
+    - job: Archive
+      steps:
+      - checkout: self   
+  
+      - task: ArchiveFiles@2
+        inputs:
+          rootFolderOrFile: '$(System.DefaultWorkingDirectory)/$(SourceWorkspaceName)'
+          includeRootFolder: true
+          archiveType: 'zip'
+          archiveFile: '$(Build.ArtifactStagingDirectory)/$(Build.BuildId).zip'
+          replaceExistingArchive: true
+      - publish: $(Build.ArtifactStagingDirectory)/$(Build.BuildId).zip
+        artifact: drop
+             
+
+  - stage: TST
+    displayName: TST stage
+    dependsOn: Build
+    jobs:
+    - deployment: Deploy
+      displayName: Deploy Databricks
+      environment: Tst
+        # variables:          
+        #   - group: Common
+        #   - group: Tst
+      strategy:
+        runOnce:
+          deploy:
+            steps:
+            - checkout: self     
+    
+            - task: toggle-triggers-dev@2
+              inputs:
+                ResourceGroupName: '$(DeploymentResourceGroupName)'
+                WorkspaceName: '$(DeployWorkspaceName)'
+                ToggleOn: false
+                Triggers: '*'
+                azureSubscription: $(azureSubscription)
+
+            - task: ExtractFiles@1
+              inputs:
+                archiveFilePatterns: '$(Pipeline.Workspace)\drop\**\*.zip'
+                destinationFolder: '$(Pipeline.Workspace)\extracted'
+                cleanDestinationFolder: true
+                overwriteExistingFiles: false
+
+            - task: Synapse workspace deployment@2
+              inputs:
+                TemplateFile: '$(Pipeline.Workspace)/extracted/$(SourceWorkspaceName)/TemplateForWorkspace.json'
+                ParametersFile: '$(Pipeline.Workspace)/extracted/$(SourceWorkspaceName)/TemplateParametersForWorkspace.json'
+                azureSubscription: '$(azureSubscription)'
+                ResourceGroupName: '$(DeploymentResourceGroupName)'
+                TargetWorkspaceName: '$(DeployWorkspaceName)'
+                DeleteArtifactsNotInTemplate: true
+
+                # OverrideArmParameters: |
+                #   workspaceName: $(DeployWorkspaceName)
+                #   #<parameter-overridden> : <value-to-be-overridden> there are parameters in arm template
+                #   #<parameter-overridden> : <value-to-be-overridden>
+                
+            - task: toggle-triggers-dev@2
+              inputs:
+                ResourceGroupName: '$(DeploymentResourceGroupName)'
+                WorkspaceName: '$(DeployWorkspaceName)'
+                ToggleOn: true
+                Triggers: '*'
+                azureSubscription: $(azureSubscription)
+           
